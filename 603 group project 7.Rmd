@@ -1,0 +1,451 @@
+---
+title: "DATA 603 Group Project"
+author: "Olayinka Mogaji"
+date: "2023-03-26"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+#
+getwd()
+setwd("C:/Users/NAO2/OneDrive/Документы/Study in UofC/Data603") 
+getwd()
+```
+
+```{r}
+bank = read.csv("bankofcanadaCP.csv")
+tail(bank,10)
+```
+
+The SP500Price, USDCADPrice, Close and Volume parameters are collected on a daily basis. However CPI and EPS values are released on a monthly basis. In order to align the information, the information for the last day of the month is taken.
+
+Converting date from string to data type:
+```{r}
+
+# Convert the Date column to a Date object using mdy() function from lubridate
+library(dplyr)
+library(lubridate)
+
+bank$Date <- mdy(bank$Date)
+```
+
+Extract data for the last day of the month:
+```{r}
+df_last_day <- bank %>%
+  
+  filter(day(Date) == days_in_month(Date))
+head(df_last_day)
+```
+
+
+# 1.Build the first order model 
+
+## 1.1 Fit the model containing all six variables
+
+
+```{r}
+firstmodel<-lm(Close~SP500Price + USDCADPrice + Volume + CPI  + EPS + PE, data=df_last_day) #Full model
+summary(firstmodel)
+```
+
+## 1.2 Test the hypothesis for the full model i.e the test of overall significance (at the significance level = 0.05).
+
+$H_{0} : \beta_{1} = \beta_{2} = \beta_{3} = \beta_{4} = \beta_{5}= \beta_{6} = 0$
+<p>$H_{a}$ : at least one $\beta_{i}$ is not zero (i = 1,2,3,4,5,6)</p>
+
+```{r}
+nullmodel<-lm(Close~1, data=df_last_day) #with only intersept
+anova(nullmodel,firstmodel) #Comparison of null model and full model
+```
+We can see that F-statistic = 241.93 with df = 2760 (p-value < 2.2e-16 < $\alpha$ = 0.05). It indicates that we should clearly reject the null hypothesis $H_{0}$. The large F-test suggests that at least one of the variables (SP500Price, USDCADPrice, Volume, CPI, EPS, PE) must be related to the stock close price. Based on the p-value, we also have extremely strong evidence that at least one of the variables is associated with the close price.
+
+## 1.3 Use Individual Coefficients Test (t-test) to find the best model
+
+$H_{0} : \beta_{i} = 0$
+<p>$H_{a} : \beta_{i}$ is not equal 0 (i=1,2,3,4,5,6)</p>
+
+```{r}
+summary(firstmodel)
+```
+Based on the results above, the individual P-values indicate that Volume and CPI do not have a significant influence on the closing price. It means we should clearly reject the null hypothesis for the SP500Price, USDCADPrice, EPS and PE. Therefore, we drop Volume and CPI in the model.
+
+## 1.4 Select the significant predictors for the first-order model
+
+```{r}
+reducedmodel<-lm(Close~SP500Price + USDCADPrice + EPS + PE, data=df_last_day) #reduced model
+summary(reducedmodel)
+```
+All the variables in the reduced model are significant based on the individual p-values < 0.05
+
+## 1.5 Select significant predictors for the first-order model based on the Adjusted R-squared, cp, AIC and RMSE
+A higher adjusted R-squared is preferred. The model with the smaller Cp, AIC and RMSE will be selected.
+
+```{r}
+library(olsrr)
+#Select the subset of predictors that do the best at meeting some well-defined objective
+#criterion, such 
+stock=ols_step_best_subset(reducedmodel, details=TRUE)
+
+# for the output interpretation
+AdjustedR<-c(stock$adjr)
+cp<-c(stock$cp)
+AIC<-c(stock$aic)
+cbind(AdjustedR,cp,AIC)
+```
+
+```{r}
+sigma<-c(firstmodel)
+model1<-lm(Close~SP500Price, data=df_last_day)
+model2<-lm(Close~SP500Price+ USDCADPrice, data=df_last_day)
+model3<-lm(Close~SP500Price+ USDCADPrice+EPS, data=df_last_day)
+model4<-lm(Close~SP500Price+ USDCADPrice+EPS+PE, data=df_last_day)
+
+variables<-c(1,2,3,4)
+sigma<-c(sigma(model1),sigma(model2),sigma(model3),sigma(model4))
+sigma_table <- data.frame(variables,sigma)
+sigma_table
+```
+
+The model with the 4 independent variables (SP500Price, USDCADPrice, EPS, PE) has the highest Adjusted R-squared of 0.9399, the least cp of 5 , the least AIC of 593.7456, and the least RMSE of 5.677.
+
+## 1.6 Improving the model
+
+### 1.6.1 Introduce Interaction terms into the model
+
+```{r}
+interactmodel <- lm(Close~(SP500Price + USDCADPrice + EPS + PE)^2, data=df_last_day)
+summary(interactmodel)
+```
+
+The significant interaction terms are SP500Price:PE and EPS:PE
+
+### 1.6.2 Excluding the interaction terms that are insignificant
+
+```{r}
+interactmodel2 <- lm(Close ~ SP500Price + USDCADPrice +  EPS + PE + SP500Price:PE + EPS:PE, data=df_last_day)
+summary(interactmodel2)
+```
+
+### 1.6.3 The problem with too high Adjusted R-squared in interaction model
+
+Adjusted R-squared is equal 1, which might indicate a problem. There might be too high correlation between predictors in the model, which we can check by analyzing all pairwise combinations of predictors in a scatterplot and using the VIF function.
+
+### 1.6.4  Checking correlation and regression between predictors
+```{r}
+library(GGally)
+price_predictors <- data.frame(df_last_day$Close, df_last_day$SP500Price, df_last_day$USDCADPrice, df_last_day$EPS, df_last_day$PE)
+ggpairs(price_predictors,lower = list(continuous = "smooth_loess", combo =
+"facethist", discrete = "facetbar", na = "na"))
+```
+From ggpairs plot, it can bee seen a high correlation = 0.957 (>0.8) between SP500Price and Close, of which the Close is the response variable.
+
+```{r}
+# The variance inflation factor
+library(mctest)
+imcdiag(reducedmodel, method="VIF")
+```
+The VIF method didn't detect any multicollinearity. The high Adjusted R-squared in the interaction model is due to the interaction terms. 
+
+### 1.6.5 Testing for higher-order models
+
+Testing for higher-order models:
+
+```{r}
+higherordermodel <- lm(Close ~ SP500Price + USDCADPrice +  EPS + I(EPS^2) + I(EPS^3) + PE + I(PE^2) + I(PE^3), data=df_last_day)
+summary(higherordermodel)
+```
+The model with cubic terms for EPS and PE variables has the the highest Adjusted R-squared among other tested higher-order models.
+
+
+# 2. Model diagnostics for the best fitted model
+## 2.1 Linearity assumption 
+
+The linear regression model assumes that there is a straight-line relationship between the predictors and the response. If the true relationship is far from linear, then virtually all of the conclusions that we draw from the fit are suspect. In addition, the prediction accuracy of the model can be significantly reduced.
+
+```{r}
+library(ggplot2)
+
+bestfirstmodel<-lm(Close~SP500Price + USDCADPrice + EPS + PE, data=df_last_day) #best first order model
+interactmodel2 <- lm(Close ~ SP500Price + USDCADPrice +  EPS + PE + SP500Price:PE + EPS:PE, data=df_last_day) #best interaction model
+higherordermodel <- lm(Close ~ SP500Price + USDCADPrice +  EPS + I(EPS^2) + I(EPS^3) + PE + I(PE^2) + I(PE^3), data=df_last_day) #cubic model
+
+
+#The residuals versus predicted (or fitted) values plots
+
+ggplot(bestfirstmodel, aes(x=.fitted, y=.resid)) +
+geom_point() + geom_smooth()+
+geom_hline(yintercept = 0)+
+ggtitle('Residuals Vs fitted values for first order model')  
+
+ggplot(interactmodel2, aes(x=.fitted, y=.resid)) +
+geom_point() + geom_smooth()+
+geom_hline(yintercept = 0)+
+ggtitle('Residuals Vs fitted values for interaction model')  
+
+ggplot(higherordermodel, aes(x=.fitted, y=.resid)) +
+geom_point() + geom_smooth()+
+geom_hline(yintercept = 0)+
+ggtitle('Residuals Vs fitted values for cubic model')  
+
+```
+
+The first order model and cubic models have some patterns in the residuals, indicating that there is a likelihood of non-linearity. 
+The model with interaction terms, on the other hand, has a more random scatter. The improved spread in the second model is due to the interaction terms.
+
+
+## 2.2 Assumption of Equal Variance - Homoscedasticity
+
+This plot is a diagnostic plot for checking the  homoscedasticity assumptions of the linear regression model. It shows the residuals (y-axis) against the fitted values (x-axis), where the fitted values are the predicted values from the model. If the model satisfies the homoscedasticity assumptions, the plot should show a random scatter of points with no obvious pattern or trend.
+
+```{r}
+bestfirstmodel<-lm(Close~SP500Price + USDCADPrice + EPS + PE, data=df_last_day) #best first order model
+interactmodel2 <- lm(Close ~ SP500Price + USDCADPrice +  EPS + PE + SP500Price:PE + EPS:PE, data=df_last_day) #best interaction model
+higherordermodel <- lm(Close ~ SP500Price + USDCADPrice +  EPS + I(EPS^2) + I(EPS^3) + PE + I(PE^2) + I(PE^3), data=df_last_day) #cubic model
+
+#scale-location plots for three models
+
+ggplot(bestfirstmodel, aes(x=.fitted, y=sqrt(abs(.stdresid)))) + geom_point() + geom_smooth()+geom_hline(yintercept = 0) + ggtitle("Scale-Location plot : Standardized Residual vs Fitted values: First order model")
+
+ggplot(interactmodel2, aes(x=.fitted, y=sqrt(abs(.stdresid)))) + geom_point() + geom_smooth()+geom_hline(yintercept = 0) + ggtitle("Scale-Location plot : Standardized Residual vs Fitted values: Interaction model")
+
+ggplot(higherordermodel, aes(x=.fitted, y=sqrt(abs(.stdresid)))) + geom_point() + geom_smooth()+geom_hline(yintercept = 0) + ggtitle("Scale-Location plot : Standardized Residual vs Fitted values: Cubic model")
+
+
+```
+
+```{r}
+#Testing for Homoscedasticity - Breusch-Pagan test for the first-order model
+library(lmtest)
+bptest(bestfirstmodel)
+```
+For the first-order model, the Scale-location plot is not conclusive at first sight. From the Breusch-Pagan test, the p-value 0.3676 is greater than 0.05 hence we fail to reject the null hypothesis that heteroscedasticity is not present. We therefore accept the null hypothesis and conclude that that the equal variance assumption is met by the first order model.
+
+
+
+```{r}
+#Testing for Homoscedasticity Homoscedasticity - Breusch-Pagan test for the interaction model
+library(lmtest)
+bptest(interactmodel2)
+```
+The Scale-location does not show the pattern of heteroscedasticity, at first sight. However, the Breusch-Pagan test, the p-value 0.044 is less than 0.05 hence we reject the null hypothesis that heteroscedasticity is not present. We therefore accept the alternative hypothesis that heteroscedasticity is present. 
+
+
+
+```{r}
+#Testing for Homoscedasticity - Breusch-Pagan test for the cubic model
+library(lmtest)
+bptest(higherordermodel)
+```
+The Scale-location plot for higher-order model shows a narrower spread of residuals along the x-axis, indicating homoscedasticity. From the Breusch-Pagan test, the p-value = 0.001 is less than 0.05 hence we reject the null hypothesis that heteroscedasticity is not present. We therefore conclude that the equal variance assumption is not met.
+
+
+
+## 2.3 Normality Assumption with Q-Q plot of Residual and Shapiro Wilk Test
+
+Normal Q-Q: This plot shows if the residuals follow a normal distribution. Ideally, we want to see the points fall close to the diagonal line, indicating that the residuals are normally distributed.
+
+
+```{r}
+bestfirstmodel<-lm(Close~SP500Price + USDCADPrice + EPS + PE, data=df_last_day) #best first order model
+
+# Check the normality assumption with Q-Q plot of residuals
+
+qqnorm(resid(bestfirstmodel))
+qqline(resid(bestfirstmodel))
+
+qqnorm(resid(interactmodel2))
+qqline(resid(interactmodel2))
+
+qqnorm(resid(higherordermodel))
+qqline(resid(higherordermodel))
+```
+
+```{r}
+#Shapiro-Wilk test for the first-order model
+shapiro.test(residuals(bestfirstmodel))
+```
+From the QQ Plot,  some data points on upper end slightly deviate from the reference line. The Shapiro-Wilk normality test with a p-value = 0.051 is borderline above the significance level of 0.05. Therefore, the normality assumption can be confirmed.
+
+
+```{r}
+#Shapiro-Wilk test for the interaction model
+shapiro.test(residuals(interactmodel2))
+```
+From the QQ Plot, data points on both ends still deviate from the reference line. Also, Shapiro-Wilk normality test confirms that the residuals are not normally distributed as the p-value = 8.876-09 (<0.05). Therefore, the normality assumption cannot be confirmed.
+
+
+```{r}
+#Shapiro-Wilk test for the cubic model
+shapiro.test(residuals(higherordermodel))
+```
+From the QQ Plot, data points on both ends still deviate from the reference line. Furthermore, Shapiro-Wilk normality test confirms that the residuals are not normally distributed as the p-value = 0.01789 (<0.05). Therefore, the normality assumption cannot be confirmed.
+
+
+
+## 2.4 Multicollinearity
+
+```{r}
+library(mctest)
+#model with main effects
+bestfirstmodel<-lm(Close~SP500Price + USDCADPrice + EPS + PE, data=df_last_day) #best first order model
+
+imcdiag(bestfirstmodel, method="VIF")
+```
+We already checked the multicollinearity in section 1.6.4, and we can see that VIF for each variable is < 10, the collinearity is not detected.
+
+## 2.5 Outliers
+
+Cook's distance is a measure of the influence of each observation on the fitted values of the regression model. High values of Cook's distance indicate that the observation may have an undue influence on the fitted values and may be an outlier
+
+#### To compute Cook's distance for each observation:
+```{r}
+cooksd <- cooks.distance(bestfirstmodel) #to compute Cook's distance for each observation.
+head(cooksd,20)
+```
+To create a leverage plot
+
+```{r}
+plot(bestfirstmodel, which = 5)
+
+```
+
+#### Identify outliers
+```{r}
+cutoff <- 4/(nrow(data)-length(bestfirstmodel$coefficients)-1)
+outliers <- which(cooksd > cutoff)
+head(outliers,20)
+```
+```{r}
+leverage <- hatvalues(bestfirstmodel)
+head(leverage,20)
+```
+Leverage values are a measure of how extreme the predictor variable values are for a given observation. It is a measure of the potential influence of a given observation on the regression line. A high leverage value indicates that the predictor values for that observation are far from the average predictor values, and therefore the observation has the potential to have a large effect on the regression line. However, high leverage values do not necessarily mean that the observation is an outlier or influential point. It just means that the observation has extreme predictor variable values.
+
+
+#### Plot of Cook's distance
+```{r}
+
+#Cook's distance for the first-order model
+bank[cooks.distance(bestfirstmodel)>0.5,]
+plot(bestfirstmodel,pch=18,col="red",which=c(4))
+
+#Cook's distance for the interaction model
+bank[cooks.distance(interactmodel2)>0.5,]
+plot(interactmodel2,pch=18,col="red",which=c(4))
+
+#Cook's distance for the cubic model
+bank[cooks.distance(higherordermodel)>0.5,]
+plot(higherordermodel,pch=18,col="red",which=c(4))
+```
+The outliers aren't influential in all three models, since their Cook's distance is less than 0.5. The outliers were maintained in the data set. 
+
+
+
+## 2.6 Box-Cox transformations
+
+In order to attempt to solve the problems with unequal variances and non-normality, we use Box-Cox transformations of the interaction model. Box-Cox transformation is a statistical method that assumes transforming the response variable so the data follows a normal distribution. The expression below presents  the Box-Cox functions transformations for various values of lambda (the transformation parameter for response variable):
+
+<p>$Y^\lambda_{i} = (Y^\lambda - 1)/\lambda$, if $\lambda$ is not 0</p>
+<p>$Y^\lambda_{i}$ = log<sub>e</sub>(Y), if $\lambda$ is 0</p>
+
+```{r}
+library(MASS) #for the boxcox()function
+bc=boxcox(interactmodel2,lambda=seq(-1.5,1.5))
+```
+From the output we found that the best lambda is close to one. 
+
+
+```{r}
+#extract best lambda
+
+bestlambda=bc$x[which(bc$y==max(bc$y))]
+bestlambda
+```
+
+```{r}
+
+# the output, when we choose λ=0
+bcmodel_null=lm(log(Close)~SP500Price + USDCADPrice + EPS + PE + SP500Price:PE + EPS:PE,data=df_last_day)
+summary(bcmodel_null)
+
+
+# the output, when we choose λ=1.015152
+bcmodel=lm((((Close^(1.015152))-1)/(1.015152))~SP500Price + USDCADPrice + EPS + PE + SP500Price:PE + EPS:PE,data=df_last_day)
+summary(bcmodel)
+
+```
+
+```{r}
+#Shapiro-Wilk test for the interaction model after box-cox transformations
+shapiro.test(residuals(bcmodel))
+```
+```{r}
+#Testing for Homoscedasticity - Breusch-Pagan test for the interaction model after box-cox transformations
+library(lmtest)
+bptest(bcmodel)
+```
+As a result, we can see that after box-cox transformation of the response variable, some of predictors and interactions in the model lost their significance. Furthermore, the problems with non-normality and heteroscedasticity still exist. Therefore, we cannot use this model for predictive purposes.  
+
+
+
+# 3 Final model
+
+We tested next three models:
+```{r}
+#first-order model without interactions
+bestfirstmodel<-lm(Close~SP500Price + USDCADPrice + EPS + PE, data=df_last_day) #best first order model
+
+#Interactive model
+interactmodel2 <- lm(Close ~ SP500Price + USDCADPrice +  EPS + PE + SP500Price:PE + EPS:PE, data=df_last_day) #best interaction model
+
+#cubic model
+higherordermodel <- lm(Close ~ SP500Price + USDCADPrice +  EPS + I(EPS^2) + I(EPS^3) + PE + I(PE^2) + I(PE^3), data=df_last_day)
+
+```
+
+
+```{r}
+summary(bestfirstmodel)$adj.r.squared
+summary(interactmodel2)$adj.r.squared
+summary(higherordermodel)$adj.r.squared
+```
+The highest Adjusted R-squared is presented in the interactive model.
+
+```{r}
+#first order model, interactive terms and the higher-order model
+
+sigma(bestfirstmodel)
+sigma(interactmodel2)
+sigma(higherordermodel)
+```
+The lowest RMSE is presented in the interactive model.
+
+Therefore, if we consider the Adjusted R-squared, RMSE measures, then the best model is Interactive model.
+
+However, the Non-Normality and Heteroscedasticity problems exist for both - interactive and cubic models. It means the prediction accuracy of the models can be significantly reduced.
+
+The first order model, on the other hand, satisfied the Normality, equal variance, multicollinearity and outliers assumptions. The linearity assumption is the only assumption that wasn't met by the first order model.
+Given the precedence that the assumptions take over the Adjusted R-squared, CIP and other mathematical values, the best model is the first order model
+
+Best model for the project:
+
+Close ~ SP500Price + USDCADPrice + EPS + PE
+
+```{r}
+#best first order model
+coefficients(bestfirstmodel)
+```
+
+
+
+
+
+
